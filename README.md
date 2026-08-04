@@ -38,3 +38,56 @@ Pushes to `main` deploy automatically once the repo is linked to the Netlify sit
 The source of truth for the design lives in the Claude project as
 `SnoCast Utah.dc.html`. Edit there and re-export; hand-editing `index.html` will
 be overwritten on the next export.
+
+## Road cameras (UDOT_API_KEY)
+
+The "Cameras on the road up" panel in the Avalanche & road section reads the UDOT camera
+roster through `netlify/functions/cameras.js`. Until a key is configured the panel shows
+"Add UDOT_API_KEY in Netlify to switch these on" and nothing breaks.
+
+To switch it on:
+
+1. Register at https://udottraffic.utah.gov/my511/register
+2. Request a developer key at https://udottraffic.utah.gov/developers/doc
+3. In Netlify: Site configuration -> Environment variables -> Add a variable
+   Key: `UDOT_API_KEY`   Value: the key
+4. Redeploy (or Deploys -> Trigger deploy -> Clear cache and deploy site)
+
+The key stays server-side; the browser only ever calls `/api/cameras`. The roster is
+cached at the edge for an hour, which keeps the function well inside UDOT's limit of ten
+calls per minute. Camera IMAGES are loaded straight from UDOT by the browser and are not
+proxied.
+
+## Avalanche danger rose
+
+The Avalanche & road section shows the Utah Avalanche Center's daily danger rose for the
+selected resort's zone, read through `netlify/functions/avalanche.js`.
+
+No key or configuration is needed. The function exists because UAC sends no CORS headers
+AND their docs require a descriptive User-Agent — a browser cannot set that header, so the
+request has to be made server-side. The response is cached for 15 minutes, matching UAC's
+own polling guidance (forecasts are issued once daily between 5 and 8 AM).
+
+Reading the rose: the centre ring is the HIGHEST elevation band and the outer ring the
+lowest; segments run clockwise from north. Lighter shading means "pockets of" that rating
+rather than the whole aspect. The badge shows the worst rating anywhere on the rose.
+
+Out of season, or if UAC returns nothing parseable, the section falls back to its previous
+season-aware copy and the rose is hidden. Nothing errors.
+
+## SNOTEL proxy (snow water equivalent + on-mountain sensors)
+
+As of 4 Aug 2026, wcc.sc.egov.usda.gov answers browser requests with a bare Apache 403
+("You don't have permission to access this resource") at any date range — a User-Agent /
+bot block, not a rate limit. It worked earlier the same day, so this arrived suddenly.
+
+Both SNOTEL reads (the "Snow fallen to date" chart and the on-mountain hourly sensor behind
+the hero temperature) now go through `netlify/functions/snotel.js`, which sends a real
+User-Agent server-side. No key needed. Responses cache 10 minutes at the edge.
+
+Fallback: if the function is missing, the page retries via r.jina.ai. That relay reaches
+NRCS often enough that the full eleven-season chart does load through it sometimes, but the
+upstream block is intermittent rather than range-dependent, so it is unreliable. Deploying
+`deploy/` is what makes the chart dependable.
+
+The path is validated against the exact report-generator shape, so it is not an open proxy.
