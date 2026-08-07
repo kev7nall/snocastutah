@@ -84,6 +84,14 @@ async function liveStreamsFor(handle) {
     return { streams: [], reason: html.indexOf("consent") !== -1 ? "consent-wall" : "no-ytinitialdata" };
   }
 
+  // Every video id on the page, live or not. Reported alongside a miss so "nothing is
+  // streaming" is distinguishable from "the page had no videos on it at all" (an unlisted
+  // cam stream never appears on the channel's streams tab).
+  const allIds = new Set();
+  const idRe = /"videoId":"([\w-]{11})"/g;
+  let idm;
+  while ((idm = idRe.exec(html))) allIds.add(idm[1]);
+
   const start = html.indexOf("{", at);
   const end = html.indexOf(";</script>", start);
   const out = [];
@@ -114,7 +122,7 @@ async function liveStreamsFor(handle) {
     }
   }
 
-  return { streams: out, reason: out.length ? "" : "none-live" };
+  return { streams: out, reason: out.length ? "" : `none-live(${allIds.size}-videos-listed)` };
 }
 
 export default async (req) => {
