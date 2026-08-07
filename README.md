@@ -63,10 +63,21 @@ proxied.
 The Avalanche & road section shows the Utah Avalanche Center's daily danger rose for the
 selected resort's zone, read through `netlify/functions/avalanche.js`.
 
-No key or configuration is needed. The function exists because UAC sends no CORS headers
-AND their docs require a descriptive User-Agent — a browser cannot set that header, so the
-request has to be made server-side. The response is cached for 15 minutes, matching UAC's
-own polling guidance (forecasts are issued once daily between 5 and 8 AM).
+Needs a token. As of 2026 the endpoint answers untokened requests with
+{"result":"error","error_message":"Unauthorized: Invalid or missing API token…"} — their
+public API docs page predates this and does not mention it.
+
+1. Request a token at https://utahavalanchecenter.org/api-access
+2. Netlify: Site configuration -> Environment variables -> Add a variable
+   Key: `UAC_API_TOKEN`   Value: the token
+3. Redeploy
+
+UAC does not document which auth convention the token uses, so the function tries
+`?token=`, `Authorization: Bearer`, then `X-API-Key`, and keeps the first that is accepted.
+If you learn the right one from them, trim the list. The function also exists because UAC
+sends no CORS headers and requires a descriptive User-Agent, which a browser cannot set.
+Successful responses cache 15 minutes, matching UAC's guidance (forecasts issue once daily
+between 5 and 8 AM).
 
 Reading the rose: the centre ring is the HIGHEST elevation band and the outer ring the
 lowest; segments run clockwise from north. Lighter shading means "pockets of" that rating
@@ -74,6 +85,27 @@ rather than the whole aspect. The badge shows the worst rating anywhere on the r
 
 Out of season, or if UAC returns nothing parseable, the section falls back to its previous
 season-aware copy and the rose is hidden. Nothing errors.
+
+## YouTube resort cams
+
+Brighton, Solitude and Deer Valley do not serve refreshing JPEGs — they stream their cams
+to YouTube around the clock. `netlify/functions/youtube-cams.js` resolves whichever streams
+a channel has live at request time and the Webcams section renders those instead of the
+resort's static cam cards.
+
+No key needed. YouTube ships the channel page's data as an inline `ytInitialData` blob, so
+the function reads video id, title and the LIVE badge straight out of it. Video IDs rotate
+every time a resort restarts a stream, which is why none are hardcoded — a baked-in id
+would render a dead player within a season.
+
+Each card shows the stream's own thumbnail (a recent frame off that stream) with a play
+button; the iframe only mounts when someone presses play, so the grid stays light. Off
+season, or if a channel handle moves, the function returns an empty list and the resort
+falls back to its static cam cards. Nothing errors either way.
+
+Channel handles live in a closed allowlist in the function — it is not a general-purpose
+proxy. Each resort carries candidate handles because YouTube handles get renamed; the
+first that answers with live streams wins. Responses cache 10 minutes at the edge.
 
 ## SNOTEL proxy (snow water equivalent + on-mountain sensors)
 
