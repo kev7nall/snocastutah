@@ -62,34 +62,59 @@ function collectLive(node, out, seen) {
 }
 
 async function liveStreamsFor(handle) {
-  const res = await fetch(`https://www.youtube.com/@${handle}/streams?hl=en&persist_hl=1`, {
+  const res = await fetch(`https://www.youtube.com/@${handle}/streams?hl=en&gl=US&persist_hl=1`, {
     headers: {
-      // YouTube serves a stripped page without a browser-shaped request.
+      // YouTube serves a stripped page without a browser-shaped request, and answers
+      // datacenter IPs (which is what a Netlify function is) with a consent interstitial
+      // that carries no ytInitialData at all. Pre-accepting consent avoids that.
       "user-agent":
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
-      "accept-language": "en-US,en;q=0.9"
+      "accept-language": "en-US,en;q=0.9",
+      "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      cookie: "CONSENT=YES+cb; SOCS=CAISNQgDEitib3FfaWRlbnRpdHlmcm9udGVuZHVpc2VydmVyXzIwMjQwMzE5LjA2X3AwGgJlbiADGgYIgOCwsAY"
     },
     signal: AbortSignal.timeout(9000)
   });
-  if (!res.ok) return [];
+  if (!res.ok) return { streams: [], reason: `http-${res.status}` };
 
   const html = await res.text();
   const at = html.indexOf("ytInitialData");
-  if (at === -1) return [];
-  const start = html.indexOf("{", at);
-  const end = html.indexOf(";</script>", start);
-  if (start === -1 || end === -1) return [];
-
-  let data;
-  try {
-    data = JSON.parse(html.slice(start, end));
-  } catch {
-    return [];
+  if (at === -1) {
+    // Consent wall, captcha, or an entirely different page shape.
+    return { streams: [], reason: html.indexOf("consent") !== -1 ? "consent-wall" : "no-ytinitialdata" };
   }
 
+  const start = html.indexOf("{", at);
+  const end = html.indexOf(";</script>", start);
   const out = [];
-  collectLive(data, out, new Set());
-  return out;
+
+  if (start !== -1 && end !== -1) {
+    try {
+      collectLive(JSON.parse(html.slice(start, end)), out, new Set());
+    } catch {
+      // Fall through to the regex sweep below.
+    }
+  }
+
+  // Fallback: YouTube's data shape changes often enough that a failed parse should not
+  // mean zero cams. Pair each videoId with the LIVE badge that follows it in the payload.
+  if (!out.length) {
+    const seen = new Set();
+    const re = /"videoId":"([\w-]{11})"/g;
+    let m;
+    while ((m = re.exec(html))) {
+      const id = m[1];
+      if (seen.has(id)) continue;
+      const window_ = html.slice(m.index, m.index + 2600);
+      if (window_.indexOf('"style":"LIVE"') === -1) continue;
+      const t = window_.match(/"title":\{"runs":\[\{"text":"([^"]{1,90})"/) || window_.match(/"title":\{"simpleText":"([^"]{1,90})"/);
+      if (!t) continue;
+      seen.add(id);
+      out.push({ id, title: t[1].replace(/\\u0026/g, "&").trim() });
+    }
+  }
+
+  return { streams: out, reason: out.length ? "" : "none-live" };
 }
 
 export default async (req) => {
@@ -98,9 +123,10 @@ export default async (req) => {
 
   if (!handles) return json({ streams: [], reason: "unknown-resort" }, "no-store");
 
+  const tried = [];
   for (const handle of handles) {
     try {
-      const streams = await liveStreamsFor(handle);
+      const { streams, reason } = await liveStreamsFor(handle);
       if (streams.length) {
         return json(
           { streams, channel: handle, fetched: new Date().toISOString() },
@@ -109,13 +135,15 @@ export default async (req) => {
           "public, max-age=600, s-maxage=600"
         );
       }
-    } catch {
-      // Try the next candidate handle.
+      tried.push(`${handle}:${reason}`);
+    } catch (err) {
+      tried.push(`${handle}:error-${err.name}`);
     }
   }
 
   // Nothing live (off-season, or the handle moved). The page keeps its static cam cards.
-  return json({ streams: [], reason: "none-live" }, "public, max-age=300, s-maxage=300");
+  // `tried` names each handle and why it came back empty, so a miss is diagnosable.
+  return json({ streams: [], reason: tried.join(" | ") || "none-live" }, "public, max-age=300, s-maxage=300");
 };
 
 export const config = { path: "/api/youtube-cams" };
